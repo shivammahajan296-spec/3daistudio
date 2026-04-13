@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3D Studio</title>
+    <link rel="stylesheet" href="/static/css/styles.css?v=28">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.162.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.162.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main class="studio-shell">
+      <section class="chat-pane" aria-label="CAD chat">
+        <header class="topbar">
+          <div class="brand-lockup">
+            <h1>3D AI Studio</h1>
+            <span class="brand-line" aria-hidden="true"></span>
+          </div>
+          <button id="resetBtn" class="secondary-btn" type="button">Reset</button>
+        </header>
+
+        <section class="key-panel" aria-label="LLM provider and API key">
+          <div class="key-heading">
+            <label for="apiKeyInput">LLM Provider Key</label>
+            <span id="apiStatusBadge" class="status-badge neutral">Not checked</span>
+          </div>
+          <div class="key-row">
+            <select id="providerSelect" aria-label="Choose LLM provider">
+              <option value="openrouter">OpenRouter</option>
+              <option value="gemini">Gemini</option>
+              <option value="gpt">GPT</option>
+              <option value="claude">Claude</option>
+            </select>
+            <input
+              id="apiKeyInput"
+              type="password"
+              autocomplete="off"
+              placeholder="Paste selected provider key"
+            >
+            <button id="saveKeyBtn" class="secondary-btn" type="button">Save</button>
+            <button id="clearKeyBtn" class="secondary-btn" type="button">Clear</button>
+          </div>
+          <p id="keyStatus">Saved only in this browser.</p>
+        </section>
+
+        <div class="messages-wrap">
+          <button id="scrollTopBtn" class="scroll-top-btn" type="button">Top</button>
+          <div id="messages" class="messages" aria-live="polite">
+          <article class="message assistant">
+            <div class="bubble">
+              Try: <strong>create a simple cosmetic jar with cylindrical body and lid</strong>
+            </div>
+          </article>
+          </div>
+        </div>
+
+        <form id="promptForm" class="composer">
+          <section id="progressPanel" class="progress-panel hidden" aria-label="Generation progress">
+            <div class="creating-indicator" aria-live="polite">
+              <span>Creating</span>
+              <span class="dot dot-one"></span>
+              <span class="dot dot-two"></span>
+              <span class="dot dot-three"></span>
+            </div>
+            <ol id="progressList"></ol>
+          </section>
+          <textarea
+            id="promptInput"
+            rows="3"
+            placeholder="Describe a product, enclosure, fixture, jar, bracket, knob..."
+            required
+          >create a simple cosmetic jar with cylindrical body and lid</textarea>
+          <div class="composer-actions">
+            <button id="generateBtn" type="submit">Generate</button>
+            <button id="editBtn" class="secondary-btn" type="button" disabled>Edit Current</button>
+            <input id="stepFileInput" class="step-file-input" type="file" accept=".step,.stp" aria-label="Choose STEP file">
+            <button id="importStepBtn" class="secondary-btn" type="button">Import STEP</button>
+            <input id="imageFileInput" class="step-file-input" type="file" accept=".png,.jpg,.jpeg,.webp" aria-label="Choose image file">
+            <button id="inferImageBtn" class="secondary-btn" type="button">Infer Image</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="preview-pane" aria-label="3D preview">
+        <div class="preview-toolbar">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2 id="statusTitle">Ready</h2>
+          </div>
+          <div class="toolbar-actions">
+            <button id="historyBtn" class="secondary-btn" type="button">Agent Log</button>
+            <a id="downloadStep" class="download-link disabled" href="#" aria-disabled="true">Download STEP</a>
+          </div>
+        </div>
+
+        <section class="versions-panel" aria-label="Model versions">
+          <div class="versions-head">
+            <h3>Versions</h3>
+            <span id="versionCount">0</span>
+          </div>
+          <ol id="versionList"></ol>
+        </section>
+
+        <div id="viewer" class="viewer">
+          <div id="viewerEmpty" class="viewer-empty">Your generated model will appear here.</div>
+          <div id="creationOverlay" class="creation-overlay hidden" aria-hidden="true">
+            <div class="creation-dots">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </div>
+        </div>
+
+        <details id="codePanel" class="code-panel">
+          <summary>Generated CadQuery Code</summary>
+          <pre><code id="codeBlock">No code yet.</code></pre>
+        </details>
+
+        <section id="historyPanel" class="history-panel hidden" aria-label="Agent log">
+          <h3>Agent Log</h3>
+          <ol id="historyList"></ol>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/static/js/app.js?v=28"></script>
+  </body>
+</html>
