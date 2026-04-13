@@ -1,6 +1,6 @@
 # 3daistudio
 
-A full-stack text-to-CAD app built with FastAPI, LangGraph, OpenRouter/LLM Foundry providers, CadQuery, and a Three.js preview.
+A full-stack text-to-CAD app built with FastAPI, LangGraph, LLM Foundry providers, CadQuery, and a Three.js preview.
 
 ## What It Does
 
@@ -34,19 +34,18 @@ requirements.txt
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export OPENROUTER_API_KEY="your-openrouter-key"
+export LLMFOUNDRY_API_KEY="your-provider-key"
 uvicorn app:app --reload
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-You can also paste the OpenRouter key directly into the UI. The browser stores it in `localStorage` and sends it with each generation request. The backend still supports `OPENROUTER_API_KEY` as the production-friendly default.
+You can also paste a Gemini, GPT, or Claude provider key directly into the UI. The browser stores it in `localStorage` and sends it with each generation request. The backend also supports provider-specific environment variables:
 
-The default model is `arcee-ai/trinity-large-preview:free`. To use another OpenRouter model:
-
-```bash
-export OPENROUTER_MODEL="openai/gpt-4o-mini"
-```
+- `GEMINI_API_KEY`
+- `GPT_API_KEY`
+- `CLAUDE_API_KEY`
+- `LLMFOUNDRY_API_KEY`
 
 ## First Prompt
 
@@ -54,14 +53,7 @@ export OPENROUTER_MODEL="openai/gpt-4o-mini"
 create a simple cosmetic jar with cylindrical body and lid
 ```
 
-The app includes a deterministic local CadQuery fallback for this jar prompt, so the first example can still run when `OPENROUTER_API_KEY` is not set or the model call fails. With an API key, the pipeline uses OpenRouter through the OpenAI Python client:
-
-```python
-OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-)
-```
+Generation requires a working provider key. No offline generation is provided.
 
 ## API
 
@@ -72,7 +64,8 @@ Request:
 ```json
 {
   "prompt": "create a simple cosmetic jar with cylindrical body and lid",
-  "openrouter_api_key": "sk-or-v1-..."
+  "llm_provider": "gemini",
+  "llm_api_key": "..."
 }
 ```
 

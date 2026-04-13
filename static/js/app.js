@@ -200,7 +200,7 @@ async function submitPrompt(mode) {
   if (apiKey) {
     addMessage(`Sending ${providerLabel()} key ${fingerprintKey(apiKey)}.`, "assistant");
   } else {
-    addMessage(`No ${providerLabel()} key is in the UI field; local fallback will be used.`, "assistant");
+    addMessage(`No ${providerLabel()} key is in the UI field; generation will fail until a key is provided.`, "assistant");
   }
   setBusy(true);
   setStatus("Generating");
@@ -211,7 +211,6 @@ async function submitPrompt(mode) {
       prompt,
       llm_provider: providerSelect.value,
       llm_api_key: apiKey || null,
-      openrouter_api_key: providerSelect.value === "openrouter" ? apiKey || null : null,
     };
     if (mode === "edit") {
       body.previous_code = currentResult.code;
@@ -282,7 +281,7 @@ function loadSavedApiKey() {
   if (savedProvider && providerSelect.querySelector(`option[value="${savedProvider}"]`)) {
     providerSelect.value = savedProvider;
   }
-  const saved = localStorage.getItem(providerStorageKey()) || (providerSelect.value === "openrouter" ? localStorage.getItem("openrouter_api_key") : "");
+  const saved = localStorage.getItem(providerStorageKey());
   if (saved) {
     apiKeyInput.value = saved;
     keyStatus.textContent = `${providerLabel()} key loaded from this browser.`;
@@ -419,7 +418,7 @@ function agentLogHtml(log) {
 
   const chips = [];
   if (detail.attempt) chips.push(`Attempt ${detail.attempt}`);
-  if (detail.llm_source) chips.push(detail.llm_source === "fallback" ? "Local fallback" : detail.provider || label(detail.llm_source));
+  if (detail.llm_source) chips.push(detail.llm_source === "error" ? "Provider error" : detail.provider || label(detail.llm_source));
   if (detail.metadata && detail.metadata.volume) chips.push(`Volume ${Math.round(detail.metadata.volume)}`);
   if (detail.metadata && detail.metadata.step_size) chips.push(`STEP ${formatBytes(detail.metadata.step_size)}`);
   if (detail.non_empty_geometry) chips.push("Non-empty geometry");
@@ -482,16 +481,12 @@ function escapeHtml(value) {
 function renderLlmStatus(llm) {
   if (!llm) return;
   const name = llm.provider_label || label(llm.provider || "provider");
-  if (llm.used_provider && !llm.fallback_used) {
+  if (llm.used_provider && !llm.failed) {
     setApiStatus("ok", `${name} connected`);
     return;
   }
-  if (llm.used_provider && llm.fallback_used) {
-    setApiStatus("warn", "Partial fallback");
-    return;
-  }
-  if (llm.fallback_used) {
-    setApiStatus(llm.key_received ? "bad" : "warn", llm.key_received ? "Auth failed" : "Fallback");
+  if (llm.failed) {
+    setApiStatus(llm.key_received ? "bad" : "warn", llm.key_received ? "Provider failed" : "No key");
   }
 }
 

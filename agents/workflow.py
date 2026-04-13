@@ -15,23 +15,11 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 from openai import OpenAI
 
-from cad.examples import SIMPLE_COSMETIC_JAR_CODE
 from cad.executor import ExecutionResult, execute_cadquery, strip_markdown_fences
 
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
 MAX_ATTEMPTS = int(os.getenv("CADGEN_MAX_ATTEMPTS", "3"))
-VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini")
 PROVIDER_CONFIGS = {
-    "openrouter": {
-        "label": "OpenRouter",
-        "env_key": "OPENROUTER_API_KEY",
-        "base_url": OPENROUTER_BASE_URL,
-        "model": DEFAULT_MODEL,
-        "vision_model": VISION_MODEL,
-        "temperature": 0.2,
-    },
     "gemini": {
         "label": "Gemini",
         "env_key": "GEMINI_API_KEY",
@@ -72,7 +60,6 @@ class AgentState(TypedDict, total=False):
     previous_code: str | None
     previous_run_id: str | None
     mode: str
-    openrouter_api_key: str | None
     llm_provider: str
     llm_api_key: str | None
     run_id: str
@@ -92,24 +79,22 @@ def run_generation(
     prompt: str,
     outputs_dir: Path,
     *,
-    openrouter_api_key: str | None = None,
-    llm_provider: str = "openrouter",
+    llm_provider: str = "gemini",
     llm_api_key: str | None = None,
     previous_code: str | None = None,
     previous_run_id: str | None = None,
 ) -> dict[str, Any]:
     graph = build_graph(outputs_dir)
     provider = normalize_provider(llm_provider)
-    selected_key = select_api_key(provider, llm_api_key or openrouter_api_key)
+    selected_key = select_api_key(provider, llm_api_key)
     config = provider_config(provider)
     initial_state: AgentState = {
         "prompt": prompt,
         "previous_code": previous_code,
         "previous_run_id": previous_run_id,
         "mode": "edit" if previous_code else "generate",
-        "openrouter_api_key": openrouter_api_key,
         "llm_provider": provider,
-        "llm_api_key": llm_api_key or openrouter_api_key,
+        "llm_api_key": llm_api_key,
         "run_id": uuid.uuid4().hex,
         "attempt": 1,
         "max_attempts": MAX_ATTEMPTS,
@@ -120,8 +105,7 @@ def run_generation(
             "provider": provider,
             "provider_label": config["label"],
             "used_provider": False,
-            "used_openrouter": False,
-            "fallback_used": False,
+            "failed": False,
             "model": config["model"],
             "calls": [],
             "last_error": None,
@@ -190,9 +174,8 @@ def import_step_model(step_path: Path, outputs_dir: Path, *, original_filename: 
             "provider": "local",
             "provider_label": "Local",
             "used_provider": False,
-            "used_openrouter": False,
-            "fallback_used": False,
-            "model": DEFAULT_MODEL,
+            "failed": False,
+            "model": None,
             "calls": [],
             "last_error": None,
         },
@@ -222,31 +205,26 @@ def build_model():
 def infer_image_prompt(
     image_path: Path,
     *,
-    openrouter_api_key: str | None = None,
-    llm_provider: str = "openrouter",
+    llm_provider: str = "gemini",
     llm_api_key: str | None = None,
     original_filename: str | None = None,
 ) -> dict[str, Any]:
     image_path = image_path.resolve()
     provider = normalize_provider(llm_provider)
     config = provider_config(provider)
-    selected_key = select_api_key(provider, llm_api_key or openrouter_api_key)
+    selected_key = select_api_key(provider, llm_api_key)
     system = (
         "You are an image-to-CAD interpretation agent. Infer the main object from the image "
         "and write a concise text-to-CAD prompt for CadQuery generation. Include likely "
         "primitive shapes, important features, rough proportions, and manufacturing-friendly "
         "details. Do not mention uncertainty unless the image is ambiguous."
     )
-    fallback = (
-        "Create a simple CAD model inspired by the uploaded image. Use robust primitive shapes, "
-        "preserve the main silhouette, add the most visible functional details, and keep it as "
-        "a non-empty manufacturable solid."
-    )
-    result = call_provider_vision(system, image_path, provider=provider, api_key=llm_api_key or openrouter_api_key, fallback=fallback)
+    result = call_provider_vision(system, image_path, provider=provider, api_key=llm_api_key)
+    ok = bool(result.text and not result.error)
     logs = [
         {
             "node": "image_inference",
-            "status": "completed" if result.source == "openrouter" else "fallback",
+            "status": "completed" if ok else "failed",
             "detail": {
                 "file_name": original_filename or image_path.name,
                 "image_path": str(image_path),
@@ -258,7 +236,7 @@ def infer_image_prompt(
         }
     ]
     return {
-        "status": "success",
+        "status": "success" if ok else "failed",
         "mode": "image_inference",
         "prompt": result.text,
         "image_url": image_output_url(image_path),
@@ -269,22 +247,21 @@ def infer_image_prompt(
             "provider": provider,
             "provider_label": config["label"],
             "used_provider": result.source == provider,
-            "used_openrouter": result.source == "openrouter",
-            "fallback_used": result.source == "fallback",
+            "failed": bool(result.error),
             "model": config["vision_model"],
             "calls": [{"node": "image_inference", "source": result.source, "error": result.error, "model": config["vision_model"], "provider": provider}],
             "last_error": result.error,
         },
-        "message": "Image inferred into a CAD prompt. Review it, then click Generate.",
+        "message": "Image inferred into a CAD prompt. Review it, then click Generate." if ok else result.error or "Image inference failed.",
     }
 
 
-def call_provider_vision(system: str, image_path: Path, *, provider: str, api_key: str | None, fallback: str) -> LLMResult:
+def call_provider_vision(system: str, image_path: Path, *, provider: str, api_key: str | None) -> LLMResult:
     provider = normalize_provider(provider)
     config = provider_config(provider)
     api_key = select_api_key(provider, api_key)
     if not api_key:
-        return LLMResult(text=fallback, source="fallback", error=f"No {config['label']} API key was provided.")
+        return LLMResult(text="", source="error", error=f"No {config['label']} API key was provided.")
     try:
         mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
         data = base64.b64encode(image_path.read_bytes()).decode("ascii")
@@ -299,7 +276,7 @@ def call_provider_vision(system: str, image_path: Path, *, provider: str, api_ke
                 image_data=data,
                 image_mime=mime,
             )
-            return LLMResult(text=content.strip(), source=provider) if content else LLMResult(text=fallback, source="fallback", error=f"{config['label']} vision returned an empty response.")
+            return LLMResult(text=content.strip(), source=provider) if content else LLMResult(text="", source="error", error=f"{config['label']} vision returned an empty response.")
         client = OpenAI(base_url=config["base_url"], api_key=api_key)
         messages = openai_style_messages(system, text, provider=provider, image_data=data, image_mime=mime)
         response = client.chat.completions.create(
@@ -309,10 +286,10 @@ def call_provider_vision(system: str, image_path: Path, *, provider: str, api_ke
         )
         content = response.choices[0].message.content
         if not content:
-            return LLMResult(text=fallback, source="fallback", error=f"{config['label']} vision returned an empty response.")
+            return LLMResult(text="", source="error", error=f"{config['label']} vision returned an empty response.")
         return LLMResult(text=content.strip(), source=provider)
     except Exception as exc:
-        return LLMResult(text=fallback, source="fallback", error=safe_error(exc))
+        return LLMResult(text="", source="error", error=safe_error(exc))
 
 
 def image_output_url(image_path: Path) -> str | None:
@@ -356,7 +333,6 @@ def understand_prompt(state: AgentState) -> AgentState:
             "and validation notes. Return plain text only."
         )
         user = f"Edit request:\n{prompt}\n\nExisting CadQuery code:\n{state['previous_code']}"
-        fallback = local_edit_plan_fallback(prompt)
     else:
         system = (
             "You are a senior CAD product designer. Convert a user product prompt into a compact "
@@ -364,8 +340,7 @@ def understand_prompt(state: AgentState) -> AgentState:
             "and validation notes. Return plain text only."
         )
         user = prompt
-        fallback = local_plan_fallback(prompt)
-    result = call_provider(system, user, state=state, fallback=fallback)
+    result = call_provider(system, user, state=state)
     next_state = update_llm_status(state, "understand_prompt", result)
     return _append_log(
         next_state,
@@ -389,7 +364,6 @@ def generate_code(state: AgentState) -> AgentState:
             f"Existing CadQuery code:\n{state['previous_code']}\n\n"
             "Return the complete edited CadQuery code now."
         )
-        fallback = local_edit_fallback(state["prompt"], state["previous_code"] or "")
     else:
         system = (
             "You generate runnable CadQuery 2.x Python. Return only Python code, no markdown. "
@@ -401,8 +375,7 @@ def generate_code(state: AgentState) -> AgentState:
             f"User prompt:\n{state['prompt']}\n\nGeometry plan:\n{state['plan']}\n\n"
             "Generate complete CadQuery code now."
         )
-        fallback = local_cadquery_fallback(state["prompt"])
-    result = call_provider(system, user, state=state, fallback=fallback)
+    result = call_provider(system, user, state=state)
     code = strip_markdown_fences(result.text)
     next_state = update_llm_status(state, "generate_code", result)
     return _append_log(
@@ -444,7 +417,7 @@ def validate_output(state: AgentState) -> AgentState:
         "non_empty_geometry": (execution.get("metadata", {}).get("volume") or 0) > 1e-6,
         "message": "Geometry validated and exported." if ok else execution.get("error", "Validation failed."),
     }
-    retry = not ok and state["attempt"] < state["max_attempts"]
+    retry = not ok and state["attempt"] < state["max_attempts"] and not state.get("llm", {}).get("last_error")
     return _append_log(state, "validate_output", "success" if ok else "failed", validation) | {
         "validation": validation,
         "should_retry": retry,
@@ -465,7 +438,7 @@ def repair_code(state: AgentState) -> AgentState:
         f"Execution metadata/stdout:\n{json.dumps(state['execution'], indent=2)}\n\n"
         "Repair the code so it executes and exports successfully."
     )
-    result = call_provider(system, user, state=state, fallback=local_cadquery_fallback(state["prompt"]))
+    result = call_provider(system, user, state=state)
     repaired = strip_markdown_fences(result.text)
     next_state = update_llm_status(state, "repair_code", result)
     return _append_log(
@@ -505,7 +478,7 @@ def package_response(state: AgentState, outputs_dir: Path) -> AgentState:
             "code": execution.get("absolute_code_path"),
         },
         "metadata": execution.get("metadata", {}),
-        "llm": state.get("llm", {"used_openrouter": False, "fallback_used": True}),
+        "llm": state.get("llm", {"failed": True}),
         "message": (
             "Your CAD model is ready. Preview the mesh or download the STEP file."
             if ok and state.get("mode") != "edit"
@@ -521,12 +494,12 @@ def route_after_validation(state: AgentState) -> str:
     return "repair" if state.get("should_retry") else "package"
 
 
-def call_provider(system: str, user: str, *, state: AgentState, fallback: str) -> LLMResult:
-    provider = normalize_provider(state.get("llm_provider", "openrouter"))
+def call_provider(system: str, user: str, *, state: AgentState) -> LLMResult:
+    provider = normalize_provider(state.get("llm_provider", "gemini"))
     config = provider_config(provider)
-    api_key = select_api_key(provider, state.get("llm_api_key") or state.get("openrouter_api_key"))
+    api_key = select_api_key(provider, state.get("llm_api_key"))
     if not api_key:
-        return LLMResult(text=fallback, source="fallback", error=f"No {config['label']} API key was provided.")
+        return LLMResult(text="", source="error", error=f"No {config['label']} API key was provided.")
 
     try:
         if provider == "claude":
@@ -546,10 +519,10 @@ def call_provider(system: str, user: str, *, state: AgentState, fallback: str) -
             )
             content = response.choices[0].message.content
         if not content:
-            return LLMResult(text=fallback, source="fallback", error=f"{config['label']} returned an empty response.")
+            return LLMResult(text="", source="error", error=f"{config['label']} returned an empty response.")
         return LLMResult(text=content.strip(), source=provider)
     except Exception as exc:
-        return LLMResult(text=fallback, source="fallback", error=safe_error(exc))
+        return LLMResult(text="", source="error", error=safe_error(exc))
 
 
 def openai_style_messages(
@@ -641,8 +614,8 @@ def normalize_api_key(api_key: str | None) -> str | None:
 
 
 def normalize_provider(provider: str | None) -> str:
-    cleaned = (provider or "openrouter").strip().lower()
-    return cleaned if cleaned in PROVIDER_CONFIGS else "openrouter"
+    cleaned = (provider or "gemini").strip().lower()
+    return cleaned if cleaned in PROVIDER_CONFIGS else "gemini"
 
 
 def provider_config(provider: str) -> dict[str, Any]:
@@ -657,7 +630,6 @@ def select_api_key(provider: str, api_key: str | None) -> str | None:
     return normalize_api_key(
         os.getenv(config["env_key"])
         or os.getenv(GENERIC_PROVIDER_ENV)
-        or (os.getenv("OPENROUTER_API_KEY") if provider == "openrouter" else None)
     )
 
 
@@ -671,12 +643,11 @@ def key_fingerprint(api_key: str | None) -> str | None:
 def update_llm_status(state: AgentState, node: str, result: LLMResult) -> AgentState:
     existing = state.get("llm", {})
     calls = list(existing.get("calls", []))
-    provider = normalize_provider(existing.get("provider") or state.get("llm_provider", "openrouter"))
+    provider = normalize_provider(existing.get("provider") or state.get("llm_provider", "gemini"))
     config = provider_config(provider)
     calls.append({"node": node, "source": result.source, "error": result.error, "model": config["model"], "provider": provider})
-    used_openrouter = any(call["source"] == "openrouter" for call in calls)
     used_provider = any(call["source"] == provider for call in calls)
-    fallback_used = any(call["source"] == "fallback" for call in calls)
+    failed = any(call["source"] == "error" or call.get("error") for call in calls)
     return state | {
         "llm": {
             "key_received": bool(existing.get("key_received")),
@@ -684,94 +655,12 @@ def update_llm_status(state: AgentState, node: str, result: LLMResult) -> AgentS
             "provider": provider,
             "provider_label": config["label"],
             "used_provider": used_provider,
-            "used_openrouter": used_openrouter,
-            "fallback_used": fallback_used,
+            "failed": failed,
             "model": config["model"],
             "calls": calls,
             "last_error": next((call["error"] for call in reversed(calls) if call.get("error")), None),
         }
     }
-
-
-def local_cadquery_fallback(prompt: str) -> str:
-    normalized = re.sub(r"\s+", " ", prompt.lower())
-    if "jar" in normalized or "cosmetic" in normalized or "cylind" in normalized:
-        return SIMPLE_COSMETIC_JAR_CODE
-    if "box" in normalized or "cube" in normalized or "rectang" in normalized:
-        return r'''
-import cadquery as cq
-
-
-def build_model():
-    body = cq.Workplane("XY").box(70, 45, 30)
-    raised_panel = cq.Workplane("XY").workplane(offset=15).box(46, 24, 4)
-    return body.union(raised_panel)
-'''
-    if "bracket" in normalized or "mount" in normalized:
-        return r'''
-import cadquery as cq
-
-
-def build_model():
-    base = cq.Workplane("XY").box(80, 35, 8)
-    upright = cq.Workplane("XY").workplane(offset=4).transformed(offset=(0, -13.5, 26)).box(80, 8, 44)
-    hole_1 = cq.Workplane("XY").workplane(offset=5).center(-24, 0).circle(5).extrude(10)
-    hole_2 = cq.Workplane("XY").workplane(offset=5).center(24, 0).circle(5).extrude(10)
-    return base.union(upright).cut(hole_1).cut(hole_2)
-'''
-    return r'''
-import cadquery as cq
-
-
-def build_model():
-    base = cq.Workplane("XY").box(60, 40, 18)
-    cylinder = cq.Workplane("XY").workplane(offset=9).circle(13).extrude(24)
-    top = cq.Workplane("XY").workplane(offset=33).circle(8).extrude(6)
-    return base.union(cylinder).union(top)
-'''
-
-
-def local_edit_fallback(prompt: str, previous_code: str) -> str:
-    normalized = re.sub(r"\s+", " ", prompt.lower())
-    if "box" in normalized:
-        return local_cadquery_fallback("box")
-    if "jar" in normalized or "cosmetic" in normalized:
-        return SIMPLE_COSMETIC_JAR_CODE
-    if previous_code.strip():
-        return previous_code
-    return local_cadquery_fallback(prompt)
-
-
-def local_edit_plan_fallback(prompt: str) -> str:
-    return (
-        f"Edit the existing CadQuery model according to this request: {prompt}. "
-        "Preserve the existing build_model() structure, keep the result exportable, "
-        "and validate that the edited model remains a non-empty solid."
-    )
-
-
-def local_plan_fallback(prompt: str) -> str:
-    normalized = re.sub(r"\s+", " ", prompt.lower())
-    if "jar" in normalized or "cosmetic" in normalized or "cylind" in normalized:
-        return (
-            "Create a cylindrical cosmetic jar in millimeters: hollow cylindrical body, "
-            "visible lid above the body, raised lid detail, neck ring suggesting threads, "
-            "and all solids combined for export."
-        )
-    if "box" in normalized or "cube" in normalized or "rectang" in normalized:
-        return (
-            "Create a rectangular box in millimeters with a main cuboid body and a raised "
-            "top panel. Keep the shape as a single combined solid for export."
-        )
-    if "bracket" in normalized or "mount" in normalized:
-        return (
-            "Create a mounting bracket in millimeters with a rectangular base, vertical "
-            "upright plate, and two through holes in the base. Keep geometry simple and robust."
-        )
-    return (
-        "Create a simple manufacturable solid in millimeters using robust CadQuery primitives. "
-        "Use a base body with one raised feature and combine solids for export."
-    )
 
 
 def execution_to_dict(result: ExecutionResult, outputs_dir: Path) -> dict[str, Any]:

@@ -30,8 +30,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=3, max_length=2000)
-    openrouter_api_key: str | None = Field(default=None, max_length=300)
-    llm_provider: str | None = Field(default="openrouter", max_length=30)
+    llm_provider: str | None = Field(default="gemini", max_length=30)
     llm_api_key: str | None = Field(default=None, max_length=500)
     previous_code: str | None = Field(default=None, max_length=50000)
     previous_run_id: str | None = Field(default=None, max_length=80)
@@ -45,7 +44,7 @@ async def index(request: Request):
 @app.post("/generate")
 async def generate(request: GenerateRequest):
     try:
-        api_key = normalize_api_key(request.llm_api_key or request.openrouter_api_key)
+        api_key = normalize_api_key(request.llm_api_key)
         return run_generation(
             request.prompt,
             OUTPUTS_DIR,
@@ -66,8 +65,8 @@ def normalize_api_key(api_key: str | None) -> str | None:
 
 
 def normalize_provider(provider: str | None) -> str:
-    cleaned = (provider or "openrouter").strip().lower()
-    return cleaned if cleaned in {"openrouter", "gemini", "gpt", "claude"} else "openrouter"
+    cleaned = (provider or "gemini").strip().lower()
+    return cleaned if cleaned in {"gemini", "gpt", "claude"} else "gemini"
 
 
 def safe_filename(filename: str) -> str:
@@ -116,9 +115,8 @@ async def import_step(file: UploadFile = File(...)):
 @app.post("/infer-image")
 async def infer_image(
     file: UploadFile = File(...),
-    openrouter_api_key: str | None = Form(default=None),
     llm_api_key: str | None = Form(default=None),
-    llm_provider: str | None = Form(default="openrouter"),
+    llm_provider: str | None = Form(default="gemini"),
 ):
     filename = file.filename or "uploaded-image.png"
     suffix = Path(filename).suffix.lower()
@@ -141,7 +139,7 @@ async def infer_image(
         return infer_image_prompt(
             image_path,
             llm_provider=normalize_provider(llm_provider),
-            llm_api_key=normalize_api_key(llm_api_key or openrouter_api_key),
+            llm_api_key=normalize_api_key(llm_api_key),
             original_filename=filename,
         )
     except Exception as exc:
